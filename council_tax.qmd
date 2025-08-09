@@ -1,0 +1,83 @@
+---
+title: "Council_Tax"
+author: "Adam Dennett"
+format: html
+editor: visual
+---
+
+```{r}
+#| echo: false
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readODS)
+library(janitor)
+
+# Step 1: Download the latest council tax Band D data
+url <- "https://assets.publishing.service.gov.uk/media/680a37d26d6ac02ee99d845f/Table_8_2025-26.ods"
+download.file(url, destfile = "data/Table_8_2025-26.ods", mode = "wb")  # 'wb' ensures binary mode
+
+# Step 2: Read the Excel file (adjust sheet name and range as needed)
+#df <- readODS::read_ods("data/Table_8_2025-26.ods", sheet = 1)
+# Read the first sheet (default is sheet 1)
+table8a <- read_ods("data/Table_8_2025-26.ods", sheet = "Table_8a", skip = 2) |>
+  janitor::clean_names()
+
+table8a <- table8a |>
+  rename(
+    avg_ctax_band_d_ex_asc_pp = average_council_tax_for_the_authority_including_adult_social_care_excluding_parish_precepts_band_d,
+    pct_chg_ctax_band_d_ex_asc_pp = percentage_change_of_average_council_tax_for_the_authority_including_adult_social_care_excluding_parish_precepts_band_d_percent,
+    avg_ctax_band_d_inc_asc_pp = average_council_tax_for_the_authority_including_adult_social_care_and_parish_precepts_band_d,
+    pct_chg_ctax_band_d_inc_asc_pp = percentage_change_of_average_council_tax_for_the_authority_including_adult_social_care_and_parish_precepts_band_d_percent,
+    asc_element_band_d = adult_social_care_element_of_average_band_d_council_tax,
+    pct_chg_asc_element_band_d = percentage_change_of_adult_social_care_element_of_average_band_d_council_tax_percent
+  )
+
+str(table8a)
+
+
+# Step 3: Clean and select relevant columns
+table8a <- table8a %>%
+  mutate(Country = if_else(str_detect(ons_code, "^W"), "Wales", "England"))
+
+# Step 4: Define multipliers
+multipliers_eng <- c(A = 6/9, B = 7/9, C = 8/9, D = 1, E = 11/9, F = 13/9, G = 15/9, H = 18/9, I = NA)
+multipliers_wales <- c(A = 5/9, B = 6/9, C = 7/9, D = 8/9, E = 11/9, F = 13/9, G = 15/9, H = 18/9, I = 21/9)
+
+# Convert multipliers to a tidy tibble
+band_multipliers <- bind_rows(
+  tibble(Band = names(multipliers_eng), multiplier = multipliers_eng, Country = "England"),
+  tibble(Band = names(multipliers_wales), multiplier = multipliers_wales, Country = "Wales")
+)
+
+# Expand table8a to include all bands
+table8a_expanded <- table8a %>%
+  left_join(band_multipliers, by = "Country") %>%
+  mutate(
+    estimated_ctax_by_band = avg_ctax_band_d_inc_asc_pp * multiplier
+  )
+
+table8a_wide <- table8a_expanded %>%
+  select(ons_code, authority, Band, estimated_ctax_by_band) %>%
+  pivot_wider(names_from = Band, values_from = estimated_ctax_by_band, names_prefix = "band_")
+
+# Step 6: Save to CSV
+write.csv(df_bands, "council_tax_bands_2025_26.csv", row.names = FALSE)
+
+```
+
+| Band | England Multiplier | Wales Multiplier |
+|------|--------------------|------------------|
+| A    | 6/9                | 5/9              |
+| B    | 7/9                | 6/9              |
+| C    | 8/9                | 7/9              |
+| D    | 1                  | 8/9              |
+| E    | 11/9               | 11/9             |
+| F    | 13/9               | 13/9             |
+| G    | 15/9               | 15/9             |
+| H    | 18/9               | 18/9             |
+| I    |                    | 21/9             |
+
+: England and Wales Council Tax Multipliers - <https://www.gov.uk/government/statistics/council-taxbase-2024-in-england/local-authority-council-taxbase-in-england-2024>
