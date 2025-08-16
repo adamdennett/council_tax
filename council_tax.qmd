@@ -5,6 +5,14 @@ format: html
 editor: visual
 ---
 
+Below are some scripts to download, clean, and visualize council tax data for England and Wales. The data includes average council tax rates by band for the year 2025-26, and the script calculates estimated council tax income for each LSOA based on these rates.
+
+## Download Council Tax Band D Data from the Government Website for 2025-26
+
+Table 8a is the one we want, which includes the average council tax for Band D properties, both including and excluding the adult social care precept.
+
+Get the data from here <https://www.gov.uk/government/statistics/council-tax-levels-set-by-local-authorities-in-england-2025-to-2026>
+
 ```{r}
 #| echo: false
 
@@ -14,6 +22,7 @@ library(tidyr)
 library(stringr)
 library(readODS)
 library(janitor)
+library(tidyverse)
 
 # Step 1: Download the latest council tax Band D data
 url <- "https://assets.publishing.service.gov.uk/media/680a37d26d6ac02ee99d845f/Table_8_2025-26.ods"
@@ -42,7 +51,7 @@ str(table8a)
 table8a <- table8a %>%
   mutate(Country = if_else(str_detect(ons_code, "^W"), "Wales", "England"))
 
-# Step 4: Define multipliers
+# Step 4: Define multipliers to generate other bands
 multipliers_eng <- c(A = 6/9, B = 7/9, C = 8/9, D = 1, E = 11/9, F = 13/9, G = 15/9, H = 18/9, I = NA)
 multipliers_wales <- c(A = 5/9, B = 6/9, C = 7/9, D = 8/9, E = 11/9, F = 13/9, G = 15/9, H = 18/9, I = 21/9)
 
@@ -63,10 +72,18 @@ table8a_wide <- table8a_expanded %>%
   select(ons_code, authority, Band, estimated_ctax_by_band) %>%
   pivot_wider(names_from = Band, values_from = estimated_ctax_by_band, names_prefix = "band_")
 
+## now convert all of the band columns to numbers rather than named numbers
+
+table8a_wide <- table8a_wide %>%
+  mutate(across(starts_with("band_"), ~ unname(.)))
+
 # Step 6: Save to CSV
 #write.csv(df_bands, "council_tax_bands_2025_26.csv", row.names = FALSE)
+#write_csv(table8a_wide, "data/table8a_wide.csv")
 
 ```
+
+
 
 | Band | England Multiplier | Wales Multiplier |
 |------|--------------------|------------------|
@@ -82,8 +99,16 @@ table8a_wide <- table8a_expanded %>%
 
 : England and Wales Council Tax Multipliers - <https://www.gov.uk/government/statistics/council-taxbase-2024-in-england/local-authority-council-taxbase-in-england-2024>
 
+Some more data here: <https://www.gov.uk/government/statistical-data-sets/live-tables-on-council-tax>
+
+OK, below, the stock of properties came from here:
+
+<https://www.gov.uk/government/statistics/council-tax-stock-of-properties-2024>
 
 ```{r}
+### We Don't need to run this every time so set to false for now
+#| eval: false
+#| include: false
 # Define URL and destination paths
 url <- "https://assets.publishing.service.gov.uk/media/6685496cab5fc5929851b92b/CTSOP1-1-1993-2024.zip"
 dest_dir <- "data"
@@ -103,19 +128,24 @@ unzip(zip_path, exdir = dest_dir)
 # Optional: list the extracted files
 list.files(dest_dir, recursive = TRUE)
 ```
+
 ```{r}
 # Define the file path
 file_path <- file.path("data", "CTSOP1_1_2024_03_31.csv")
 
 # Read the CSV, treating custom strings as NA
-stock_2024 <- read.csv(file_path, na.strings = c("N/A", "-", ".."), stringsAsFactors = FALSE)
+#stock_2024 <- read.csv(file_path, na.strings = c("N/A", "-", ".."), stringsAsFactors = FALSE)
+
+stock_2024 <- read_csv(file = file_path, na = c("N/A", "-", ".."))
+write_csv(stock_2024, "data/stock_2024.csv")
+
 
 # Optional: quick check on structure and missing values
 str(stock_2024)
 summary(stock_2024)
 ```
-Time to reshape this stock file for LSOAs but include the nested geographies
 
+Time to reshape this stock file for LSOAs but include the nested geographies
 
 ```{r}
 library(dplyr)
@@ -183,6 +213,8 @@ lsoa_nested <- nested %>%
     msoa_code, msoa_name,
     starts_with("band_"), all_properties
   )
+
+
 ```
 
 Calculate the total Council Tax Income for each LSOA based on the banded data.
@@ -193,6 +225,8 @@ library(dplyr)
 # Step 1: Join council tax levels to LSOA data
 lsoa_enriched <- lsoa_nested %>%
   left_join(table8a_wide, by = c("laua_code" = "ons_code"))
+
+write_csv(lsoa_enriched, "data/lsoa_enriched.csv")
 
 # Step 2: Calculate tax income per band
 band_letters <- letters[1:9]  # a to i
@@ -210,7 +244,19 @@ income_cols <- paste0("band_", band_letters, "_tax_income")
 
 lsoa_enriched <- lsoa_enriched %>%
   mutate(total_ctax_income = rowSums(select(., all_of(income_cols)), na.rm = TRUE))
+
+lsoa_enriched <- as.data.frame(lsoa_enriched)
+
+#write_csv("data/nested.csv", stock_2024)
 ```
+
+```{r}
+unmatched_codes <- lsoa_nested %>%
+  anti_join(table8a_wide, by = c("laua_code" = "ons_code")) %>%
+  select(laua_code) %>%
+  distinct()
+```
+
 
 Map it
 
@@ -253,4 +299,3 @@ leaflet(data = lsoa_map_data) %>%
     position = "bottomright"
   )
 ```
-
